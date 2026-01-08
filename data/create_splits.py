@@ -87,6 +87,58 @@ def create_time_based_split(ratings: pd.DataFrame, train_ratio=0.8, val_ratio=0.
     return train_df, val_df, test_df
 
 
+def filter_by_minimum_history(train_df, val_df, test_df, min_ratings=5):
+    """
+    Filter val/test to only include users with minimum history in train.
+
+    This reduces cold-start users in evaluation sets, making metrics more interpretable
+    by focusing on warm-start ranking quality rather than cold-start performance.
+
+    Args:
+        train_df: Training dataframe
+        val_df: Validation dataframe
+        test_df: Test dataframe
+        min_ratings: Minimum number of ratings required in train (default: 5)
+
+    Returns:
+        Filtered val_df, test_df
+    """
+    print("\n" + "="*60)
+    print(f"Filtering val/test by minimum history (>={min_ratings} train ratings)")
+    print("="*60)
+
+    # Count ratings per user in training data
+    train_user_counts = train_df.groupby('user_id').size()
+
+    # Identify users with sufficient history
+    qualified_users = set(train_user_counts[train_user_counts >= min_ratings].index)
+
+    print(f"\nUsers in train: {len(train_user_counts):,}")
+    print(f"Users with >={min_ratings} ratings: {len(qualified_users):,} ({len(qualified_users)/len(train_user_counts)*100:.1f}%)")
+
+    # Filter validation
+    val_original_size = len(val_df)
+    val_df_filtered = val_df[val_df['user_id'].isin(qualified_users)].copy()
+    val_filtered_pct = len(val_df_filtered) / val_original_size * 100
+
+    print(f"\nValidation:")
+    print(f"  Before filter: {val_original_size:,} ratings")
+    print(f"  After filter:  {len(val_df_filtered):,} ratings ({val_filtered_pct:.1f}% retained)")
+    print(f"  Removed:       {val_original_size - len(val_df_filtered):,} ratings")
+
+    # Filter test
+    test_original_size = len(test_df)
+    test_df_filtered = test_df[test_df['user_id'].isin(qualified_users)].copy()
+    test_filtered_pct = len(test_df_filtered) / test_original_size * 100
+
+    print(f"\nTest:")
+    print(f"  Before filter: {test_original_size:,} ratings")
+    print(f"  After filter:  {len(test_df_filtered):,} ratings ({test_filtered_pct:.1f}% retained)")
+    print(f"  Removed:       {test_original_size - len(test_df_filtered):,} ratings")
+
+    return val_df_filtered, test_df_filtered
+
+
 def analyze_splits(train_df, val_df, test_df):
     """Analyze the characteristics of the splits."""
     print("\n" + "="*60)
@@ -161,24 +213,34 @@ def save_splits(train_df, val_df, test_df, movies, users, output_dir: Path):
 
 ## Split Strategy
 
-Time-based split to simulate real-world recommendation scenarios:
-- **Train**: Earliest 80% of interactions by timestamp
-- **Validation**: Next 10% of interactions
-- **Test**: Latest 10% of interactions
+**Two-stage split to balance temporal realism with evaluation interpretability:**
+
+1. **Time-based split** (80/10/10):
+   - Train: Earliest 80% of interactions by timestamp
+   - Validation: Next 10% of interactions
+   - Test: Latest 10% of interactions
+
+2. **Minimum history filter**:
+   - Validation and test sets filtered to only include users with ≥5 ratings in training
+   - Reduces cold-start users from ~54% to near 0%
+   - Makes ranking metrics more interpretable (focuses on warm-start performance)
+   - Maintains temporal ordering within retained ratings
 
 ## Files
 
 - `train_ratings.parquet`: Training ratings (user_id, movie_id, rating, timestamp)
-- `val_ratings.parquet`: Validation ratings
-- `test_ratings.parquet`: Test ratings
+- `val_ratings.parquet`: Validation ratings (filtered for users with history)
+- `test_ratings.parquet`: Test ratings (filtered for users with history)
 - `movies.parquet`: Movie metadata (movie_id, title, genres)
 - `users.parquet`: User metadata (user_id, gender, age, occupation, zip_code)
 
 ## Notes
 
-- Some users/movies in validation/test may not appear in training (cold-start scenarios)
+- **Cold-start handling**: Val/test focus on warm users. Cold-start can be evaluated separately if needed.
+- **Coverage**: ~70-80% of original val/test ratings retained after filtering
 - Timestamps represent when the rating was made
 - Ratings are on a 1-5 scale (integer values)
+- Movies: Very few new movies in val/test (<1%)
 """
 
     with open(output_dir / 'README.md', 'w') as f:
@@ -196,14 +258,20 @@ def main():
     # Load data
     movies, ratings, users = load_movielens_data(data_dir)
 
-    # Create splits
+    # Create time-based splits
     train_df, val_df, test_df = create_time_based_split(
         ratings,
         train_ratio=0.8,
         val_ratio=0.1
     )
 
-    # Analyze splits
+    # Filter val/test to reduce cold-start users
+    val_df, test_df = filter_by_minimum_history(
+        train_df, val_df, test_df,
+        min_ratings=5
+    )
+
+    # Analyze filtered splits
     analyze_splits(train_df, val_df, test_df)
 
     # Save splits

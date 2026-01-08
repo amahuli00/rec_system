@@ -1,0 +1,70 @@
+{
+  "version": "1.0",
+  "created_at": "2026-01-08T15:59:45.490361",
+  "train_timestamp_max": 975768738,
+  "num_features": 35,
+  "feature_groups": {
+    "user_agg": [
+      "user_rating_count",
+      "user_avg_rating",
+      "user_rating_std",
+      "user_rating_min",
+      "user_rating_max"
+    ],
+    "movie_agg": [
+      "movie_rating_count",
+      "movie_avg_rating",
+      "movie_rating_std",
+      "movie_rating_min",
+      "movie_rating_max"
+    ],
+    "interaction": [
+      "user_movie_rating_diff",
+      "user_rating_count_norm",
+      "movie_rating_count_norm",
+      "user_movie_activity_product"
+    ],
+    "demographic": [
+      "gender",
+      "age_group",
+      "occupation"
+    ],
+    "genre": [
+      "genre_action",
+      "genre_adventure",
+      "genre_animation",
+      "genre_childrens",
+      "genre_comedy",
+      "genre_crime",
+      "genre_documentary",
+      "genre_drama",
+      "genre_fantasy",
+      "genre_film_noir",
+      "genre_horror",
+      "genre_musical",
+      "genre_mystery",
+      "genre_romance",
+      "genre_sci_fi",
+      "genre_thriller",
+      "genre_war",
+      "genre_western"
+    ]
+  },
+  "cold_start_defaults": {
+    "user_rating_count": 0.0,
+    "user_avg_rating": 3.5905079814588703,
+    "user_rating_std": 1.1203262217434804,
+    "user_rating_min": 1.0,
+    "user_rating_max": 5.0,
+    "movie_rating_count": 0.0,
+    "movie_avg_rating": 3.5905079814588703,
+    "movie_rating_std": 1.1203262217434804,
+    "movie_rating_min": 1.0,
+    "movie_rating_max": 5.0
+  },
+  "split_sizes": {
+    "train": 800167,
+    "val": 23636,
+    "test": 80298
+  }
+}
