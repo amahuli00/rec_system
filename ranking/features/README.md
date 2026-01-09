@@ -11,6 +11,14 @@ Created: 2026-01-08 19:59:17
 - `test_features.parquet`: Test features (80,298 rows)
 - `feature_metadata.json`: Feature schema and metadata
 
+**Important**: Each parquet file contains:
+- **Pairs (user_id, movie_id, rating)** from that split's ratings
+- **Feature statistics** computed from training data only
+
+For example, `test_features.parquet` has test set pairs but all aggregation
+features (user_avg_rating, movie_rating_count, etc.) are frozen from training.
+This mirrors production: new user-movie pairs use pre-computed statistics.
+
 ## Feature Categories (35 features total)
 
 ### User Aggregation Features (6)

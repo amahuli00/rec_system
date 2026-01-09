@@ -274,6 +274,15 @@ class FeatureBuilder:
         """
         Build complete feature matrix for a single ratings split.
 
+        The output contains PAIRS from the input ratings_df, but all aggregation
+        STATISTICS come from training data (via self.user_stats, self.movie_stats).
+
+        For example, when ratings_df is test data:
+        - Pairs (user_id, movie_id, rating) come from test_ratings
+        - Features (user_avg_rating, movie_rating_count, etc.) are frozen from train
+
+        This mirrors production: new pairs use pre-computed statistics.
+
         Args:
             ratings_df: Ratings DataFrame (train, val, or test).
 
