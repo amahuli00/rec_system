@@ -28,3 +28,6 @@ ipywidgets>=8.0.0
 tqdm>=4.64.0
 python-dateutil>=2.8.0
 pyarrow>=21.0.0
+
+# Experiment tracking
+mlflow>=2.9.0

@@ -56,6 +56,15 @@ ipython_config.py
 *.log
 logs/
 
+# MLflow
+mlruns/
+mlartifacts/
+
+# Model checkpoints (ranking models)
+ranking/models/*.pkl
+ranking/models/*.json
+ranking/models/*.txt
+
 # OS
 .DS_Store
 Thumbs.db
