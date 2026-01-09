@@ -13,27 +13,27 @@ Created: 2026-01-08 19:59:17
 
 ## Feature Categories (35 features total)
 
-### User Aggregation Features (5)
+### User Aggregation Features (6)
 Computed from training data only:
 - user_rating_count: Number of ratings given
 - user_avg_rating: Mean rating given
 - user_rating_std: Std dev of ratings
 - user_rating_min: Minimum rating
 - user_rating_max: Maximum rating
+- user_rating_count_norm: log1p(user_rating_count)
 
-### Movie Aggregation Features (5)
+### Movie Aggregation Features (6)
 Computed from training data only:
 - movie_rating_count: Number of ratings received (popularity)
 - movie_avg_rating: Mean rating received (quality)
 - movie_rating_std: Std dev (polarization)
 - movie_rating_min: Minimum rating
 - movie_rating_max: Maximum rating
-
-### User-Movie Interaction Features (4)
-- user_movie_rating_diff: user_avg - movie_avg
-- user_rating_count_norm: log1p(user_rating_count)
 - movie_rating_count_norm: log1p(movie_rating_count)
-- user_movie_activity_product: user_norm * movie_norm
+
+### User-Movie Interaction Features (2)
+- user_movie_rating_diff: user_avg - movie_avg
+- user_movie_activity_product: user_rating_count_norm * movie_rating_count_norm
 
 ### Demographic Features (3)
 - gender: Binary (M=1, F=0)
