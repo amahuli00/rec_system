@@ -1,0 +1,24 @@
+# Embedding dimension sweep
+# Run with: python -m candidate_gen.training.experiment_runner --config candidate_gen/experiments/sweep_embedding_dim.yaml
+
+name: sweep_embedding_dim
+description: Find optimal embedding dimension
+
+base_config:
+  use_mlp: false
+  batch_size: 1024
+  learning_rate: 0.001
+  weight_decay: 0.000001
+  num_epochs: 20
+  temperature: 0.1
+  patience: 5
+  eval_every_n_epochs: 5
+  device: cpu
+  data_dir: candidate_gen/artifacts/data
+
+sweep_params:
+  embedding_dim: [32, 64, 128, 256]
+
+num_seeds: 3  # Run each config 3 times for variance estimation
+
+output_dir: candidate_gen/artifacts/experiments

@@ -429,6 +429,42 @@ class FeatureBuilder:
 
         logger.info("Metadata saved")
 
+    def save_serving_data(self, output_dir: Optional[Path] = None) -> None:
+        """
+        Save pre-computed data for serving (real-time inference).
+
+        This saves user and movie statistics as parquet files for fast lookup
+        during serving. These are the same stats computed in
+        _compute_aggregation_features() from training data.
+
+        Args:
+            output_dir: Directory to save serving data. Defaults to config.output_dir.
+
+        Note:
+            Must be called after run() or after _load_data() and
+            _compute_aggregation_features() have been called.
+        """
+        if self.user_stats is None or self.movie_stats is None:
+            raise RuntimeError(
+                "User/movie stats not computed. Call run() first or "
+                "call _load_data() and _compute_aggregation_features()."
+            )
+
+        output_dir = output_dir or self.config.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save user stats
+        user_stats_path = output_dir / "user_stats.parquet"
+        self.user_stats.to_parquet(user_stats_path, index=False)
+        logger.info(f"Saved user stats: {user_stats_path} ({len(self.user_stats):,} users)")
+
+        # Save movie stats
+        movie_stats_path = output_dir / "movie_stats.parquet"
+        self.movie_stats.to_parquet(movie_stats_path, index=False)
+        logger.info(f"Saved movie stats: {movie_stats_path} ({len(self.movie_stats):,} movies)")
+
+        logger.info("Serving data saved successfully")
+
     def _save_readme(self, output_dir: Path) -> None:
         """Save README documentation."""
         feature_cols = [

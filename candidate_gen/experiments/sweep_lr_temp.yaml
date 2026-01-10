@@ -1,0 +1,24 @@
+# Learning rate and temperature sweep
+# Run with: python -m candidate_gen.training.experiment_runner --config candidate_gen/experiments/sweep_lr_temp.yaml
+
+name: sweep_lr_temp
+description: Find optimal learning rate and temperature combination
+
+base_config:
+  embedding_dim: 128
+  use_mlp: false
+  batch_size: 1024
+  weight_decay: 0.000001
+  num_epochs: 20
+  patience: 5
+  eval_every_n_epochs: 5
+  device: cpu
+  data_dir: candidate_gen/artifacts/data
+
+sweep_params:
+  learning_rate: [0.0001, 0.001, 0.01]
+  temperature: [0.05, 0.1, 0.2]
+
+num_seeds: 2  # 3x3x2 = 18 runs
+
+output_dir: candidate_gen/artifacts/experiments

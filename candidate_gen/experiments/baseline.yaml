@@ -1,0 +1,20 @@
+# Baseline experiment configuration
+# Run with: python -m candidate_gen.training.train_model --config candidate_gen/experiments/baseline.yaml
+
+name: baseline
+description: Baseline Two-Tower model with default hyperparameters
+
+base_config:
+  embedding_dim: 128
+  use_mlp: false
+  batch_size: 1024
+  learning_rate: 0.001
+  weight_decay: 0.000001
+  num_epochs: 30
+  temperature: 0.1
+  patience: 5
+  eval_every_n_epochs: 5
+  device: cpu
+  seed: 42
+  data_dir: candidate_gen/artifacts/data
+  output_dir: candidate_gen/artifacts/models
