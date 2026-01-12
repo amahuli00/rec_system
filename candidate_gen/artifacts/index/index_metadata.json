@@ -1,0 +1,6 @@
+{
+  "index_type": "flat",
+  "metric": "ip",
+  "num_vectors": 3662,
+  "embedding_dim": 128
+}

@@ -1,0 +1,6 @@
+{
+  "num_users": 5400,
+  "num_items": 3662,
+  "embedding_dim": 128,
+  "normalized": true
+}

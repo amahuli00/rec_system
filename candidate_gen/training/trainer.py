@@ -219,9 +219,10 @@ class TwoTowerTrainer:
                 val_metrics = self._validate()
                 self.val_metrics_history.append(val_metrics)
 
-                # Log metrics
+                # Log metrics (replace @ with _at_ for MLflow compatibility)
                 for metric, value in val_metrics.items():
-                    mlflow.log_metric(f"val_{metric}", value, step=epoch)
+                    mlflow_metric = metric.replace("@", "_at_")
+                    mlflow.log_metric(f"val_{mlflow_metric}", value, step=epoch)
 
                 # Print metrics
                 metrics_str = ", ".join(f"{k}: {v:.4f}" for k, v in val_metrics.items())
@@ -352,10 +353,11 @@ class TwoTowerTrainer:
             k_values=self.config.eval_k_values,
         )
 
-        # Log baselines
+        # Log baselines (replace @ with _at_ for MLflow compatibility)
         for baseline_name, baseline_metrics in baselines.items():
             for metric, value in baseline_metrics.items():
-                mlflow.log_metric(f"{baseline_name}_{metric}", value)
+                mlflow_metric = metric.replace("@", "_at_")
+                mlflow.log_metric(f"{baseline_name}_{mlflow_metric}", value)
 
         # Print comparison
         logger.info("\nFinal Results:")
