@@ -1,0 +1,100 @@
+# Docker Compose for Recommendation Service with Redis
+#
+# This file defines the multi-container setup for the recommendation service:
+# 1. Redis: Feature store backend
+# 2. Recommendation Service: FastAPI application
+#
+# Usage:
+#   docker-compose up -d        # Start all services
+#   docker-compose logs -f      # View logs
+#   docker-compose down         # Stop all services
+#   docker-compose down -v      # Stop and remove volumes (clears Redis data)
+#
+# Development workflow:
+#   1. Start services: docker-compose up -d
+#   2. Migrate features to Redis: python ranking/serving/scripts/migrate_to_redis.py
+#   3. Test API: curl http://localhost:8000/recommend -d '{"user_id": 635, "k": 10}'
+#   4. View Redis data: docker-compose exec redis redis-cli HGETALL features:user:635:stats
+
+version: '3.8'
+
+services:
+  # =============================================================================
+  # Redis: Feature Store Backend
+  # =============================================================================
+  # Redis serves as the primary feature store for user and movie features.
+  # Features are stored as HASHes for efficient field-level access.
+  #
+  # Key naming convention:
+  #   features:user:{user_id}:stats        → user aggregation stats
+  #   features:user:{user_id}:demographics → user demographics
+  #   features:movie:{movie_id}:stats      → movie aggregation stats
+  #   features:movie:{movie_id}:genres     → movie genre flags
+  #
+  redis:
+    image: redis:7-alpine
+    container_name: rec-redis
+    # Command with configuration options:
+    # --maxmemory 256mb: Limit memory usage
+    # --maxmemory-policy allkeys-lru: Evict least recently used keys when full
+    # --appendonly yes: Enable AOF persistence for durability
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      # Persist Redis data across container restarts
+      - redis-data:/data
+    healthcheck:
+      # Check Redis is responding to PING
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  # =============================================================================
+  # Recommendation Service: FastAPI Application
+  # =============================================================================
+  # The main recommendation service that:
+  # 1. Retrieves candidates via Two-Tower + FAISS
+  # 2. Ranks candidates via XGBoost with Redis features
+  # 3. Returns personalized recommendations
+  #
+  recommendation-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rec-service
+    ports:
+      - "8000:8000"
+    environment:
+      # Redis connection settings
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Feature store mode (redis or parquet)
+      - FEATURE_STORE_MODE=redis
+      # Logging level
+      - LOG_LEVEL=INFO
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+# =============================================================================
+# Volumes
+# =============================================================================
+# Named volumes for data persistence
+volumes:
+  redis-data:
+    driver: local

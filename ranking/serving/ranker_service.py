@@ -3,16 +3,23 @@ Ranking service for real-time candidate scoring.
 
 This module provides the RankerService class that orchestrates the full
 ranking pipeline: feature building, model inference, and result sorting.
+
+The service supports two modes:
+1. Feature Store Mode: Uses Redis + fallback with circuit breaker (production)
+2. Parquet Mode: Loads features from parquet files (development/legacy)
 """
 
 import logging
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 
 import xgboost as xgb
 
 from ranking.shared_utils import load_model, load_feature_columns
 from .feature_builder import ServingFeatureBuilder
+
+if TYPE_CHECKING:
+    from ranking.serving.feature_store import FeatureStore
 
 logger = logging.getLogger(__name__)
 
@@ -38,25 +45,35 @@ class RankerService:
     The service is stateful - it loads the model and feature builder once
     at initialization for fast repeated inference.
 
-    Example:
+    Example (Feature Store Mode - production):
+        from ranking.serving.feature_store import LayeredFeatureStore, RedisFeatureStore, FallbackFeatureStore
+        store = LayeredFeatureStore(RedisFeatureStore(), FallbackFeatureStore())
+        service = RankerService(feature_store=store)
+        results = service.rank(user_id=1, candidate_ids=[1, 50, 100, 200])
+
+    Example (Parquet Mode - legacy):
         service = RankerService()
         results = service.rank(user_id=1, candidate_ids=[1, 50, 100, 200])
-        for item in results:
-            print(f"Rank {item.rank}: Movie {item.movie_id} ({item.predicted_score:.3f})")
     """
 
-    def __init__(self, model_name: str = "xgboost_tuned"):
+    def __init__(
+        self,
+        model_name: str = "xgboost_tuned",
+        feature_store: Optional["FeatureStore"] = None,
+    ):
         """
         Initialize the ranking service.
 
         Args:
             model_name: Which model to use (default: xgboost_tuned).
                        Available models can be found via get_available_models().
+            feature_store: Optional FeatureStore for feature retrieval.
+                          If None, falls back to loading parquet files.
 
         Loads:
             - XGBoost model
             - Feature column ordering
-            - ServingFeatureBuilder with all required data
+            - ServingFeatureBuilder (with feature store or parquet mode)
         """
         logger.info(f"Initializing RankerService with model: {model_name}")
 
@@ -67,10 +84,12 @@ class RankerService:
         # Load feature columns (critical for correct inference)
         self.feature_columns = load_feature_columns()
 
-        # Initialize feature builder
-        self.feature_builder = ServingFeatureBuilder()
+        # Initialize feature builder (with or without feature store)
+        self.feature_store = feature_store
+        self.feature_builder = ServingFeatureBuilder(feature_store=feature_store)
 
-        logger.info("RankerService initialized successfully")
+        mode = "feature store" if feature_store else "parquet"
+        logger.info(f"RankerService initialized successfully (mode: {mode})")
 
     def rank(
         self,

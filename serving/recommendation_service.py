@@ -14,6 +14,8 @@ Architecture:
     CandidateGenerationService.retrieve(user_id, candidate_pool_size)
         ↓ (returns ~100-500 candidates)
     RankerService.rank(user_id, candidate_ids)
+        ↓                ↓
+        │        FeatureStore (Redis + Fallback)
         ↓ (re-ranks candidates)
     Return top K ranked items
 
@@ -22,21 +24,27 @@ Design Decisions:
 - Configurable candidate pool: Retrieve more candidates than needed, then rank to top-K
 - Graceful degradation: Handle cold-start users and missing data elegantly
 - Error isolation: Service initialization failures are surfaced clearly
+- Feature store integration: Optional Redis feature store with circuit breaker
 
 Performance:
 - Initialization: 2-3 seconds (loads models, embeddings, FAISS index)
 - Per-request latency: 10-20ms for k=10, 15-30ms for k=50
   - Candidate retrieval: 1-5ms
   - Ranking: 5-15ms (depends on candidate pool size)
+  - Feature lookup (Redis): <1ms with connection pooling
 """
 
 import logging
+import os
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 
 from candidate_gen.serving.candidate_service import CandidateGenerationService
 from ranking.serving.ranker_service import RankerService
+
+if TYPE_CHECKING:
+    from ranking.serving.feature_store import FeatureStore
 
 # Configure logging
 logging.basicConfig(
@@ -105,29 +113,38 @@ class RecommendationService:
     def __init__(
         self,
         candidate_pool_size: int = 100,
-        model_name: str = "xgboost_tuned"
+        model_name: str = "xgboost_tuned",
+        feature_store: Optional["FeatureStore"] = None,
     ):
         """
         Initialize the recommendation service.
 
         This performs one-time setup:
-        1. Load candidate generation service (two-tower model + FAISS index)
-        2. Load ranking service (XGBoost model + feature builder)
-        3. Validate both services initialized successfully
+        1. Initialize feature store (Redis + fallback) if configured
+        2. Load candidate generation service (two-tower model + FAISS index)
+        3. Load ranking service (XGBoost model + feature builder)
+        4. Validate all services initialized successfully
 
         Args:
             candidate_pool_size: Number of candidates to retrieve before ranking.
                                  Should be larger than the k you'll request.
             model_name: Name of the ranking model to use.
+            feature_store: Optional FeatureStore for feature retrieval.
+                          If None and FEATURE_STORE_MODE=redis, creates one automatically.
 
         Raises:
-            RuntimeError: If either service fails to initialize
+            RuntimeError: If any service fails to initialize
         """
         logger.info("Initializing RecommendationService...")
         start_time = time.time()
 
         self.candidate_pool_size = candidate_pool_size
         self.model_name = model_name
+
+        # Initialize feature store (if configured)
+        self.feature_store = feature_store
+        if self.feature_store is None:
+            self.feature_store = self._create_feature_store_from_env()
 
         # Initialize candidate generation service
         try:
@@ -141,17 +158,62 @@ class RecommendationService:
             logger.error(f"Failed to initialize candidate generation service: {e}")
             raise RuntimeError(f"Candidate service initialization failed: {e}")
 
-        # Initialize ranking service
+        # Initialize ranking service (with feature store if available)
         try:
             logger.info(f"Loading ranking service (model: {model_name})...")
-            self.ranker_service = RankerService(model_name=model_name)
-            logger.info("Ranking service loaded successfully")
+            self.ranker_service = RankerService(
+                model_name=model_name,
+                feature_store=self.feature_store
+            )
+            mode = "feature store" if self.feature_store else "parquet"
+            logger.info(f"Ranking service loaded successfully (mode: {mode})")
         except Exception as e:
             logger.error(f"Failed to initialize ranking service: {e}")
             raise RuntimeError(f"Ranking service initialization failed: {e}")
 
         init_time = time.time() - start_time
         logger.info(f"RecommendationService initialized in {init_time:.2f}s")
+
+    def _create_feature_store_from_env(self) -> Optional["FeatureStore"]:
+        """
+        Create a feature store based on environment variables.
+
+        Environment Variables:
+            FEATURE_STORE_MODE: "redis" or "parquet" (default: parquet)
+            REDIS_HOST: Redis host (default: localhost)
+            REDIS_PORT: Redis port (default: 6379)
+
+        Returns:
+            FeatureStore if mode is "redis", None otherwise
+        """
+        mode = os.getenv("FEATURE_STORE_MODE", "parquet").lower()
+
+        if mode != "redis":
+            logger.info(f"Feature store mode: {mode} (using parquet)")
+            return None
+
+        # Import here to avoid circular dependencies
+        from ranking.serving.feature_store import (
+            RedisFeatureStore,
+            FallbackFeatureStore,
+            LayeredFeatureStore,
+        )
+
+        redis_host = os.getenv("REDIS_HOST", "localhost")
+        redis_port = int(os.getenv("REDIS_PORT", "6379"))
+
+        logger.info(f"Initializing Redis feature store at {redis_host}:{redis_port}")
+
+        try:
+            primary = RedisFeatureStore(host=redis_host, port=redis_port)
+            fallback = FallbackFeatureStore()
+            feature_store = LayeredFeatureStore(primary=primary, fallback=fallback)
+            logger.info("Feature store initialized (Redis + fallback)")
+            return feature_store
+        except Exception as e:
+            logger.warning(f"Failed to initialize Redis feature store: {e}")
+            logger.warning("Falling back to parquet mode")
+            return None
 
     def get_recommendations(
         self,
@@ -306,10 +368,28 @@ class RecommendationService:
         except Exception as e:
             checks['ranking_service'] = f'unhealthy: {e}'
 
-        # Overall status
-        all_healthy = all(v == 'healthy' for v in checks.values())
+        # Check feature store (if configured)
+        if self.feature_store is not None:
+            try:
+                fs_health = self.feature_store.health_check()
+                if fs_health.get('healthy', False):
+                    checks['feature_store'] = 'healthy'
+                else:
+                    # Feature store degraded but service can still work with fallback
+                    checks['feature_store'] = f"degraded: {fs_health.get('message', 'unknown')}"
+            except Exception as e:
+                checks['feature_store'] = f'degraded: {e}'
+        else:
+            checks['feature_store'] = 'not configured (using parquet)'
+
+        # Overall status: healthy if candidate and ranking are healthy
+        # Feature store can be degraded (fallback mode) and service is still healthy
+        core_healthy = (
+            checks.get('candidate_service') == 'healthy' and
+            checks.get('ranking_service') == 'healthy'
+        )
 
         return {
-            'status': 'healthy' if all_healthy else 'unhealthy',
+            'status': 'healthy' if core_healthy else 'unhealthy',
             'checks': checks
         }

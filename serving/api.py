@@ -28,8 +28,10 @@ Performance:
 """
 
 import logging
+import os
 import time
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -46,8 +48,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global service instance (initialized at startup)
+# Global service instances (initialized at startup)
 recommendation_service: Optional[RecommendationService] = None
+drift_detector: Optional[Any] = None  # Will be DriftDetector when initialized
 
 
 # ============================================================================
@@ -201,7 +204,7 @@ async def lifespan(app: FastAPI):
     This replaces the deprecated @app.on_event("startup") pattern.
     """
     # Startup
-    global recommendation_service
+    global recommendation_service, drift_detector
     logger.info("Starting recommendation service...")
 
     try:
@@ -214,11 +217,48 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to start recommendation service: {e}")
         raise
 
+    # Initialize drift detector if baseline exists
+    try:
+        drift_detector = _initialize_drift_detector()
+        if drift_detector:
+            logger.info("Drift detector initialized")
+        else:
+            logger.info("Drift detector not initialized (no baseline found)")
+    except Exception as e:
+        logger.warning(f"Failed to initialize drift detector: {e}")
+        drift_detector = None
+
     yield
 
     # Shutdown
     logger.info("Shutting down recommendation service...")
     recommendation_service = None
+    drift_detector = None
+
+
+def _initialize_drift_detector():
+    """
+    Initialize drift detector if baseline statistics exist.
+
+    Returns:
+        DriftDetector instance or None if baseline not found
+    """
+    from ranking.serving.drift import BaselineStatistics, DriftDetector
+    from ranking.shared_utils import FEATURES_DIR
+
+    baseline_path = FEATURES_DIR / "baseline_stats.json"
+
+    if not baseline_path.exists():
+        logger.info(f"No baseline statistics found at {baseline_path}")
+        return None
+
+    try:
+        baseline = BaselineStatistics.load(baseline_path)
+        detector = DriftDetector(baseline)
+        return detector
+    except Exception as e:
+        logger.warning(f"Failed to load baseline: {e}")
+        return None
 
 
 # ============================================================================
@@ -502,6 +542,116 @@ async def root():
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/health"
+    }
+
+
+# ============================================================================
+# Drift Detection Endpoints
+# ============================================================================
+
+@app.get(
+    "/drift/status",
+    status_code=status.HTTP_200_OK,
+    summary="Get drift detection status",
+    description="Returns the current status of drift detection"
+)
+async def drift_status():
+    """
+    Get current drift detection status.
+
+    Returns:
+        Drift detector status including monitored features and last report
+    """
+    if drift_detector is None:
+        return {
+            "enabled": False,
+            "message": "Drift detection not initialized (no baseline found)"
+        }
+
+    return {
+        "enabled": True,
+        **drift_detector.get_status()
+    }
+
+
+@app.post(
+    "/drift/check",
+    status_code=status.HTTP_200_OK,
+    summary="Run drift check",
+    description="Manually trigger a drift check and return the report"
+)
+async def drift_check(reset_after: bool = False):
+    """
+    Manually trigger a drift check.
+
+    Args:
+        reset_after: Reset statistics after check (for time-windowed checks)
+
+    Returns:
+        Drift report with per-feature results
+    """
+    if drift_detector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Drift detection not initialized"
+        )
+
+    report = drift_detector.check_drift(reset_after=reset_after)
+    return report.to_dict()
+
+
+@app.get(
+    "/drift/report",
+    status_code=status.HTTP_200_OK,
+    summary="Get last drift report",
+    description="Returns the most recent drift detection report"
+)
+async def drift_report():
+    """
+    Get the most recent drift report.
+
+    Returns:
+        Last drift report or error if no report available
+    """
+    if drift_detector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Drift detection not initialized"
+        )
+
+    report = drift_detector.get_last_report()
+    if report is None:
+        return {"message": "No drift report available. Run /drift/check first."}
+
+    return report.to_dict()
+
+
+@app.get(
+    "/drift/history",
+    status_code=status.HTTP_200_OK,
+    summary="Get drift report history",
+    description="Returns recent drift detection reports"
+)
+async def drift_history(limit: int = 10):
+    """
+    Get recent drift reports.
+
+    Args:
+        limit: Maximum number of reports to return
+
+    Returns:
+        List of recent drift reports
+    """
+    if drift_detector is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Drift detection not initialized"
+        )
+
+    history = drift_detector.get_report_history(limit=limit)
+    return {
+        "count": len(history),
+        "reports": [r.to_dict() for r in history]
     }
 
 

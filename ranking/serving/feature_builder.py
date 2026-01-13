@@ -2,12 +2,25 @@
 Feature builder for real-time serving.
 
 This module builds features for a single user and multiple candidate movies
-at inference time. It uses pre-computed statistics from training data
-for fast lookup.
+at inference time. It supports two modes:
+
+1. **Feature Store Mode** (recommended for production):
+   - Uses a FeatureStore (Redis + fallback) for feature retrieval
+   - Enables fast lookup with graceful degradation
+   - Supports real-time feature updates
+
+2. **Parquet Mode** (legacy, for local development):
+   - Loads features from parquet files into memory
+   - Simple but doesn't scale or support updates
+
+The feature store mode is preferred because it:
+- Separates storage from computation
+- Enables circuit breaker for reliability
+- Provides observability (source tracking, latency)
 """
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, Optional, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -19,6 +32,10 @@ from ranking.shared_utils import (
     load_feature_metadata,
 )
 
+# Conditional import to avoid circular dependency
+if TYPE_CHECKING:
+    from ranking.serving.feature_store import FeatureStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,34 +43,71 @@ class ServingFeatureBuilder:
     """
     Builds features for real-time serving (single user, multiple candidates).
 
-    This class loads pre-computed user/movie statistics and user/movie metadata
-    once at initialization, then builds features on-demand for inference.
+    This class supports two modes of operation:
+
+    1. **Feature Store Mode** (production):
+       Pass a FeatureStore to the constructor. Features are fetched from
+       the store (Redis + fallback) with circuit breaker protection.
+
+    2. **Parquet Mode** (development/legacy):
+       Don't pass a FeatureStore. Features are loaded from parquet files
+       into memory dictionaries. Simple but doesn't scale.
 
     All feature computation mirrors the batch FeatureBuilder logic to ensure
     consistency between training and serving.
 
-    Example:
+    Example (Feature Store Mode):
+        store = LayeredFeatureStore(RedisFeatureStore(), FallbackFeatureStore())
+        builder = ServingFeatureBuilder(feature_store=store)
+        features = builder.build_features(user_id=123, candidate_movie_ids=[1, 50])
+
+    Example (Parquet Mode - legacy):
         builder = ServingFeatureBuilder()
-        features = builder.build_features(
-            user_id=123,
-            candidate_movie_ids=[1, 50, 100, 200]
-        )
-        # features is a DataFrame with 4 rows and 35 feature columns
+        features = builder.build_features(user_id=123, candidate_movie_ids=[1, 50])
     """
 
-    def __init__(self):
+    def __init__(self, feature_store: Optional["FeatureStore"] = None):
         """
         Initialize the serving feature builder.
 
-        Loads all required data for feature building:
-        - Pre-computed user statistics
-        - Pre-computed movie statistics
-        - User demographics
-        - Movie genres
-        - Feature metadata (cold-start defaults, feature columns)
+        Args:
+            feature_store: Optional FeatureStore for feature retrieval.
+                          If None, falls back to loading parquet files.
+
+        Loads:
+        - Feature column order (always required)
+        - Feature metadata with cold-start defaults
+        - If no feature_store: parquet files into memory dicts
         """
         logger.info("Initializing ServingFeatureBuilder...")
 
+        self.feature_store = feature_store
+        self.use_feature_store = feature_store is not None
+
+        # Load feature metadata (always needed for column order)
+        self.metadata = load_feature_metadata()
+        self.cold_start_defaults = self.metadata.get("cold_start_defaults", {})
+
+        # Load feature column order (critical for inference)
+        self.feature_columns = load_feature_columns()
+
+        if self.use_feature_store:
+            logger.info("Using FeatureStore mode")
+            # Still need genre columns for building features
+            self.genre_cols = self.metadata.get("feature_groups", {}).get("genre", [])
+            # Initialize empty dicts (not used in feature store mode)
+            self.user_stats_dict = {}
+            self.movie_stats_dict = {}
+            self.users_dict = {}
+            self.movies_dict = {}
+        else:
+            logger.info("Using Parquet mode (legacy)")
+            self._load_parquet_data()
+
+        logger.info("ServingFeatureBuilder initialized")
+
+    def _load_parquet_data(self) -> None:
+        """Load feature data from parquet files (legacy mode)."""
         # Load pre-computed stats
         self.user_stats = pd.read_parquet(FEATURES_DIR / "user_stats.parquet")
         self.movie_stats = pd.read_parquet(FEATURES_DIR / "movie_stats.parquet")
@@ -74,15 +128,8 @@ class ServingFeatureBuilder:
         self._prepare_genre_features()
         self.movies_dict = self.movies_with_genres.set_index("movie_id").to_dict("index")
 
-        # Load feature metadata
-        self.metadata = load_feature_metadata()
-        self.cold_start_defaults = self.metadata.get("cold_start_defaults", {})
-
-        # Load feature column order (critical for inference)
-        self.feature_columns = load_feature_columns()
-
         logger.info(
-            f"ServingFeatureBuilder initialized: "
+            f"Loaded parquet data: "
             f"{len(self.user_stats_dict)} users, "
             f"{len(self.movie_stats_dict)} movies"
         )
@@ -163,7 +210,41 @@ class ServingFeatureBuilder:
         return features_df[self.feature_columns]
 
     def _get_user_features(self, user_id: int) -> Dict:
-        """Get user features, using cold-start defaults if user not found."""
+        """
+        Get user features, using cold-start defaults if user not found.
+
+        In feature store mode, fetches from the store (with circuit breaker).
+        In parquet mode, uses in-memory dictionaries.
+        """
+        if self.use_feature_store:
+            return self._get_user_features_from_store(user_id)
+        else:
+            return self._get_user_features_from_parquet(user_id)
+
+    def _get_user_features_from_store(self, user_id: int) -> Dict:
+        """Get user features from the feature store."""
+        vec = self.feature_store.get_user_features(user_id)
+
+        if vec is not None:
+            # Feature store returned values (either from Redis or fallback)
+            return vec.features.copy()
+        else:
+            # This shouldn't happen with layered store (fallback always returns)
+            # But handle it gracefully just in case
+            logger.warning(f"Feature store returned None for user {user_id}, using defaults")
+            return {
+                "user_rating_count": self.cold_start_defaults.get("user_rating_count", 0),
+                "user_avg_rating": self.cold_start_defaults.get("user_avg_rating", 3.5),
+                "user_rating_std": self.cold_start_defaults.get("user_rating_std", 1.0),
+                "user_rating_min": self.cold_start_defaults.get("user_rating_min", 1.0),
+                "user_rating_max": self.cold_start_defaults.get("user_rating_max", 5.0),
+                "gender": 0,
+                "age_group": 25,
+                "occupation": 0,
+            }
+
+    def _get_user_features_from_parquet(self, user_id: int) -> Dict:
+        """Get user features from in-memory parquet dictionaries (legacy)."""
         features = {}
 
         # User aggregation stats
@@ -197,7 +278,42 @@ class ServingFeatureBuilder:
         return features
 
     def _get_movie_features(self, movie_id: int) -> Dict:
-        """Get movie features, using cold-start defaults if movie not found."""
+        """
+        Get movie features, using cold-start defaults if movie not found.
+
+        In feature store mode, fetches from the store (with circuit breaker).
+        In parquet mode, uses in-memory dictionaries.
+        """
+        if self.use_feature_store:
+            return self._get_movie_features_from_store(movie_id)
+        else:
+            return self._get_movie_features_from_parquet(movie_id)
+
+    def _get_movie_features_from_store(self, movie_id: int) -> Dict:
+        """Get movie features from the feature store."""
+        vec = self.feature_store.get_movie_features(movie_id)
+
+        if vec is not None:
+            # Feature store returned values (either from Redis or fallback)
+            return vec.features.copy()
+        else:
+            # This shouldn't happen with layered store (fallback always returns)
+            # But handle it gracefully just in case
+            logger.warning(f"Feature store returned None for movie {movie_id}, using defaults")
+            features = {
+                "movie_rating_count": self.cold_start_defaults.get("movie_rating_count", 0),
+                "movie_avg_rating": self.cold_start_defaults.get("movie_avg_rating", 3.5),
+                "movie_rating_std": self.cold_start_defaults.get("movie_rating_std", 1.0),
+                "movie_rating_min": self.cold_start_defaults.get("movie_rating_min", 1.0),
+                "movie_rating_max": self.cold_start_defaults.get("movie_rating_max", 5.0),
+            }
+            # Add zero genres
+            for genre_col in self.genre_cols:
+                features[genre_col] = 0
+            return features
+
+    def _get_movie_features_from_parquet(self, movie_id: int) -> Dict:
+        """Get movie features from in-memory parquet dictionaries (legacy)."""
         features = {}
 
         # Movie aggregation stats
