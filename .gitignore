@@ -75,3 +75,17 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Docker
+*.tar
+docker-compose.override.yml
+
+# Redis
+dump.rdb
+*.rdb
+*.aof
+
+# Environment files
+.env
+.env.local
+.env.*.local
