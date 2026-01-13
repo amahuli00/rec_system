@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Data files (exclude raw data, include processed artifacts)
+data/raw/
+data/interim/
+*.csv
+!ranking/features/*.parquet
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+*.md
+!serving/README.md
+docs/
+
+# Logs
+*.log
+logs/
+
+# MLflow
+mlruns/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# macOS
+.DS_Store
+
+# Temp files
+tmp/
+*.tmp
+*.bak
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
